@@ -7,6 +7,8 @@ package sqlite3
 
 /*
 #cgo CFLAGS: -std=gnu99
+#cgo CFLAGS: -DSQLITE_ENABLE_RTREE -DSQLITE_THREADSAFE
+#cgo CFLAGS: -DSQLITE_ENABLE_FTS3 -DSQLITE_ENABLE_FTS3_PARENTHESIS
 #include <sqlite3.h>
 #include <stdlib.h>
 #include <string.h>
@@ -287,19 +289,13 @@ func (d *SQLiteDriver) Open(dsn string) (driver.Conn, error) {
 			return nil, errors.New(C.GoString(C.sqlite3_errmsg(db)))
 		}
 
-		stmt, err := conn.Prepare("SELECT load_extension(?);")
-		if err != nil {
-			return nil, err
-		}
-
 		for _, extension := range d.Extensions {
-			if _, err = stmt.Exec([]driver.Value{extension}); err != nil {
-				return nil, err
+			cext := C.CString(extension)
+			defer C.free(unsafe.Pointer(cext))
+			rv = C.sqlite3_load_extension(db, cext, nil, nil)
+			if rv != C.SQLITE_OK {
+				return nil, errors.New(C.GoString(C.sqlite3_errmsg(db)))
 			}
-		}
-
-		if err = stmt.Close(); err != nil {
-			return nil, err
 		}
 
 		rv = C.sqlite3_enable_load_extension(db, 0)
@@ -441,8 +437,9 @@ func (s *SQLiteStmt) Exec(args []driver.Value) (driver.Result, error) {
 	}
 	rv := C.sqlite3_step(s.s)
 	if rv != C.SQLITE_ROW && rv != C.SQLITE_OK && rv != C.SQLITE_DONE {
+		err := s.c.lastError()
 		C.sqlite3_reset(s.s)
-		return nil, s.c.lastError()
+		return nil, err
 	}
 
 	res := &SQLiteResult{
